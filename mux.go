@@ -3,75 +3,170 @@ package goji
 import (
 	"context"
 	"net/http"
-
-	"goji.io/internal"
 )
 
-/*
-Mux is a HTTP multiplexer / router similar to net/http.ServeMux.
-
-Muxes multiplex traffic between many http.Handlers by selecting the first
-applicable Pattern. They then call a common middleware stack, finally passing
-control to the selected http.Handler. See the documentation on the Handle
-function for more information about how routing is performed, the documentation
-on the Pattern type for more information about request matching, and the
-documentation for the Use method for more about middleware.
-
-Muxes cannot be configured concurrently from multiple goroutines, nor can they
-be configured concurrently with requests.
-*/
+// Mux is a HTTP multiplexer and router similar to net/http.ServeMux.
+//
+// Muxes multiplex traffic between many http.Handlers by selecting the first
+// route registered to a supplied Matcher.
+//
+// They then call a common middleware stack, finally passing
+// control to the selected http.Handler. See the documentation on the Handle
+// function for more information about how routing is performed, the documentation
+// on the Pattern type for more information about request matching, and the
+// documentation for the Use method for more about middleware.
+//
+// Muxes cannot be configured concurrently from multiple goroutines, nor can they
+// be configured concurrently with requests.
 type Mux struct {
+	router     Router
 	handler    http.Handler
 	middleware []func(http.Handler) http.Handler
-	router     router
-	root       bool
+	sub        bool
 }
 
-/*
-NewMux returns a new Mux with no configured middleware or routes.
-*/
-func NewMux() *Mux {
-	m := SubMux()
-	m.root = true
-	return m
-}
-
-/*
-SubMux returns a new Mux with no configured middleware or routes, and which
-inherits routing information from the passed context. This is especially useful
-when using one Mux as a http.Handler registered to another "parent" Mux.
-
-For example, a common pattern is to organize applications in a way that mirrors
-the structure of its URLs: a photo-sharing site might have URLs that start with
-"/users/" and URLs that start with "/albums/", and might be organized using
-three Muxes:
-
-	root := NewMux()
-	users := SubMux()
-	root.Handle(pat.New("/users/*"), users)
-	albums := SubMux()
-	root.Handle(pat.New("/albums/*"), albums)
-
-	// e.g., GET /users/carl
-	users.Handle(pat.Get("/:name"), renderProfile)
-	// e.g., POST /albums/
-	albums.Handle(pat.Post("/"), newAlbum)
-*/
-func SubMux() *Mux {
-	m := &Mux{}
+// NewMux returns a new Mux with no configured middleware using the default
+// router.
+func NewMux(opts ...MuxOption) *Mux {
+	m := &Mux{
+		router: new(router),
+	}
+	for _, o := range opts {
+		o(m)
+	}
 	m.buildChain()
 	return m
 }
 
-// ServeHTTP implements net/http.Handler.
-func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if m.root {
-		ctx := r.Context()
-		ctx = context.WithValue(ctx, internal.Path, r.URL.EscapedPath())
-		r = r.WithContext(ctx)
-	}
-	r = m.router.route(r)
-	m.handler.ServeHTTP(w, r)
+// NewSubMux returns a new sub-Mux with no configured middleware using the
+// default router.
+func NewSubMux(opts ...MuxOption) *Mux {
+	return NewMux(append(opts, SubMux)...)
 }
 
-var _ http.Handler = &Mux{}
+// buildChain builds the http.Handler chain to use during dispatch.
+func (m *Mux) buildChain() {
+	m.handler = handler{}
+	for i := len(m.middleware) - 1; i >= 0; i-- {
+		m.handler = m.middleware[i](m.handler)
+	}
+}
+
+// Use appends a middleware to the Mux's middleware stack.
+//
+// Middleware are composable pieces of functionality that augment
+// http.Handlers.  Common examples of middleware include request loggers,
+// authentication checkers, and metrics gatherers.
+//
+// Middleware are evaluated in the reverse order in which they were added, but
+// the resulting http.Handlers execute in "normal" order (i.e., the
+// http.Handler returned by the first Middleware to be added gets called
+// first).
+//
+// For instance, given middleware A, B, and C, added in that order, Goji will
+// behave similarly to this snippet:
+//
+// 	augmentedHandler := A(B(C(yourHandler)))
+// 	augmentedHandler.ServeHTTP(res, req)
+//
+// Assuming each of A, B, and C look something like this:
+//
+// 	func A(inner http.Handler) http.Handler {
+// 		log.Print("A: called")
+// 		mw := func(res http.ResponseWriter, req *http.Request) {
+// 			log.Print("A: before")
+// 			inner.ServeHTTP(res, req)
+// 			log.Print("A: after")
+// 		}
+// 		return http.HandlerFunc(mw)
+// 	}
+//
+// we'd expect to see the following in the log:
+//
+// 	C: called
+// 	B: called
+// 	A: called
+// 	---
+// 	A: before
+// 	B: before
+// 	C: before
+// 	yourHandler: called
+// 	C: after
+// 	B: after
+// 	A: after
+//
+// Note that augmentedHandler will called many times, producing the log output
+// below the divider, while the outer middleware functions (the log output
+// above the divider) will only be called a handful of times at application
+// boot.
+//
+// Middleware in Goji is called after routing has been performed. Therefore it
+// is possible to examine any routing information placed into the Request
+// context by Patterns, or to view or modify the http.Handler that will be
+// routed to.  Middleware authors should read the documentation for the
+// "middleware" subpackage for more information about how this is done.
+//
+// The http.Handler returned by the given middleware must be safe for
+// concurrent use by multiple goroutines. It is not safe to concurrently
+// register middleware from multiple goroutines, or to register middleware
+// concurrently with requests.
+func (m *Mux) Use(middleware func(http.Handler) http.Handler) {
+	m.middleware = append(m.middleware, middleware)
+	m.buildChain()
+}
+
+// Handle adds a new route to the Mux. Requests that match the given Matcher will
+// be dispatched to the given http.Handler.
+//
+// Routing is performed in the order in which routes are added: the first route
+// with a matching Matcher will be used. In particular, Goji guarantees that
+// routing is performed in a manner that is indistinguishable from the following
+// algorithm:
+//
+// 	// Assume routes is a slice that every call to Handle appends to
+// 	for _, route := range routes {
+// 		// For performance, Matchers can opt out of this call to Match.
+// 		// See the documentation for Matcher for more.
+// 		if req2 := route.pattern.Match(req); req2 != nil {
+// 			route.handler.ServeHTTP(res, req2)
+// 			break
+// 		}
+// 	}
+//
+// It is not safe to concurrently register routes from multiple goroutines, or to
+// register routes concurrently with requests.
+func (m *Mux) Handle(matcher Matcher, handler http.Handler) {
+	m.router.Handle(matcher, handler)
+}
+
+// HandleFunc adds a new route to the Mux. It is equivalent to calling Handle on a
+// handler wrapped with http.HandlerFunc, and is provided only for convenience.
+func (m *Mux) HandleFunc(matcher Matcher, handler func(http.ResponseWriter, *http.Request)) {
+	m.Handle(matcher, http.HandlerFunc(handler))
+}
+
+// ServeHTTP satisfies the http.Handler interface.
+func (m *Mux) ServeHTTP(res http.ResponseWriter, req *http.Request) {
+	if !m.sub {
+		req = req.WithContext(context.WithValue(req.Context(), pathKey, req.URL.EscapedPath()))
+	}
+	m.handler.ServeHTTP(res, m.router.Route(req))
+}
+
+type handler struct{}
+
+func (handler) ServeHTTP(res http.ResponseWriter, req *http.Request) {
+	if h := req.Context().Value(handlerKey); h != nil {
+		h.(http.Handler).ServeHTTP(res, req)
+		return
+	}
+	http.NotFound(res, req)
+}
+
+// MuxOption is a Mux option.
+type MuxOption func(*Mux)
+
+// SubMux is a Mux option to toggle the mux a sub mux.
+func SubMux(m *Mux) {
+	m.sub = true
+}

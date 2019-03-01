@@ -1,71 +1,51 @@
 package goji
 
 import (
-	"net/http"
-	"net/http/httptest"
-	"strings"
-
-	"goji.io/internal"
+	"net/url"
+	"testing"
 )
 
-type boolPattern bool
-
-func (b boolPattern) Match(r *http.Request) *http.Request {
-	if b {
-		return r
+func TestHex(t *testing.T) {
+	tests := []struct {
+		input byte
+		ishex bool
+		unhex byte
+	}{
+		{'0', true, 0},
+		{'4', true, 4},
+		{'a', true, 10},
+		{'F', true, 15},
+		{'h', false, 0},
+		{'^', false, 0},
 	}
-	return nil
-}
 
-type testPattern struct {
-	index   int
-	mark    *int
-	methods []string
-	prefix  string
-}
-
-func (t testPattern) Match(r *http.Request) *http.Request {
-	ctx := r.Context()
-	if t.index < *t.mark {
-		return nil
-	}
-	path := ctx.Value(internal.Path).(string)
-	if !strings.HasPrefix(path, t.prefix) {
-		return nil
-	}
-	if t.methods != nil {
-		if _, ok := t.HTTPMethods()[r.Method]; !ok {
-			return nil
+	for _, test := range tests {
+		if actual := ishex(test.input); actual != test.ishex {
+			t.Errorf("ishex(%v) == %v, expected: %v", test.input, actual, test.ishex)
+		}
+		if actual := unhex(test.input); actual != test.unhex {
+			t.Errorf("unhex(%v) == %v, expected: %v", test.input, actual, test.unhex)
 		}
 	}
-	return r
 }
 
-func (t testPattern) PathPrefix() string {
-	return t.prefix
-}
-
-func (t testPattern) HTTPMethods() map[string]struct{} {
-	if t.methods == nil {
-		return nil
+func TestUnescape(t *testing.T) {
+	tests := []struct {
+		input  string
+		err    error
+		output string
+	}{
+		{"hello", nil, "hello"},
+		{"file%20one%26two", nil, "file one&two"},
+		{"one/two%2fthree", nil, "one/two/three"},
+		{"this%20is%0not%valid", url.EscapeError("%0n"), ""},
 	}
-	m := make(map[string]struct{})
-	for _, method := range t.methods {
-		m[method] = struct{}{}
+
+	for _, test := range tests {
+		if actual, err := unescape(test.input); err != test.err {
+			t.Errorf("unescape(%q) had err %v, expected: %q", test.input, err, test.err)
+		} else if actual != test.output {
+			t.Errorf("unescape(%q) = %q, expected: %q)", test.input, actual, test.output)
+		}
 	}
-	return m
-}
-
-type intHandler int
-
-func (i intHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-}
-
-func wr() (*httptest.ResponseRecorder, *http.Request) {
-	w := httptest.NewRecorder()
-	r, err := http.NewRequest("GET", "/", nil)
-	if err != nil {
-		panic(err)
-	}
-	return w, r
 }

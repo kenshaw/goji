@@ -1,9 +1,8 @@
-package pat
+package goji
 
 import "net/url"
 
-// Stolen (with modifications) from net/url in the Go stdlib
-
+// stolen (with modifications) from net/url in the Go stdlib
 func ishex(c byte) bool {
 	switch {
 	case '0' <= c && c <= '9':
