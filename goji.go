@@ -47,7 +47,7 @@ func Path(ctx context.Context) string {
 	return ""
 }
 
-// Param returns a bound, named named variable from the context.
+// Param returns a bound, named variable from the context.
 //
 // For example, given a mux with a single GET route:
 //

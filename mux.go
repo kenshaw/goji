@@ -22,14 +22,16 @@ type Mux struct {
 	router     Router
 	handler    http.Handler
 	middleware []func(http.Handler) http.Handler
+	notFound   http.Handler
 	sub        bool
 }
 
-// NewMux returns a new Mux with no configured middleware using the default
+// New returns a new Mux with no configured middleware using the default
 // router.
-func NewMux(opts ...MuxOption) *Mux {
+func New(opts ...MuxOption) *Mux {
 	m := &Mux{
-		router: new(router),
+		router:   new(router),
+		notFound: http.HandlerFunc(http.NotFound),
 	}
 	for _, o := range opts {
 		o(m)
@@ -41,12 +43,18 @@ func NewMux(opts ...MuxOption) *Mux {
 // NewSubMux returns a new sub-Mux with no configured middleware using the
 // default router.
 func NewSubMux(opts ...MuxOption) *Mux {
-	return NewMux(append(opts, SubMux)...)
+	return New(append(opts, SubMux)...)
 }
 
 // buildChain builds the http.Handler chain to use during dispatch.
 func (m *Mux) buildChain() {
-	m.handler = handler{}
+	m.handler = http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		if h := req.Context().Value(handlerKey); h != nil {
+			h.(http.Handler).ServeHTTP(res, req)
+			return
+		}
+		m.notFound.ServeHTTP(res, req)
+	})
 	for i := len(m.middleware) - 1; i >= 0; i-- {
 		m.handler = m.middleware[i](m.handler)
 	}
@@ -153,20 +161,24 @@ func (m *Mux) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	m.handler.ServeHTTP(res, m.router.Route(req))
 }
 
-type handler struct{}
-
-func (handler) ServeHTTP(res http.ResponseWriter, req *http.Request) {
-	if h := req.Context().Value(handlerKey); h != nil {
-		h.(http.Handler).ServeHTTP(res, req)
-		return
-	}
-	http.NotFound(res, req)
-}
-
 // MuxOption is a Mux option.
 type MuxOption func(*Mux)
 
-// SubMux is a Mux option to toggle the mux a sub mux.
+// SubMux is a mux option to toggle the mux a sub mux.
 func SubMux(m *Mux) {
 	m.sub = true
+}
+
+// NotFound is a mux option to set  not found (404) handler.
+func NotFound(h http.Handler) MuxOption {
+	return func(m *Mux) {
+		m.notFound = h
+	}
+}
+
+// NotFoundFunc is a mux option to set a not found (404) handler func.
+func NotFoundFunc(f http.HandlerFunc) MuxOption {
+	return func(m *Mux) {
+		m.notFound = f
+	}
 }

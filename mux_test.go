@@ -11,7 +11,7 @@ func TestMuxHandlerInterface(t *testing.T) {
 }
 
 func TestMuxExistingPath(t *testing.T) {
-	m := NewMux()
+	m := New()
 	m.HandleFunc(boolMatcher(true), func(res http.ResponseWriter, req *http.Request) {
 		if path := req.Context().Value(pathKey).(string); path != "/" {
 			t.Errorf("expected path=/, got %q", path)
@@ -33,7 +33,7 @@ func TestSubMuxExistingPath(t *testing.T) {
 }
 
 func TestMiddleware(t *testing.T) {
-	m := NewMux()
+	m := New()
 	ch := make(chan string, 10)
 	m.Use(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
@@ -57,7 +57,7 @@ func TestMiddleware(t *testing.T) {
 }
 
 func TestMiddlewareReconfigure(t *testing.T) {
-	m := NewMux()
+	m := New()
 	ch := make(chan string, 10)
 	m.Use(makeMiddleware(ch, "one"))
 	m.Use(makeMiddleware(ch, "two"))
@@ -73,7 +73,7 @@ func TestMiddlewareReconfigure(t *testing.T) {
 }
 
 func TestHandle(t *testing.T) {
-	m := NewMux()
+	m := New()
 	var called bool
 	m.Handle(boolMatcher(true), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		called = true
@@ -85,7 +85,7 @@ func TestHandle(t *testing.T) {
 }
 
 func TestHandleFunc(t *testing.T) {
-	m := NewMux()
+	m := New()
 	var called bool
 	m.HandleFunc(boolMatcher(true), func(http.ResponseWriter, *http.Request) {
 		called = true
@@ -96,18 +96,20 @@ func TestHandleFunc(t *testing.T) {
 	}
 }
 
-func TestHandler(t *testing.T) {
-	var h http.Handler = new(handler)
+func TestNotFoundHandler(t *testing.T) {
+	var h http.Handler = New()
 	res, req := resreq()
 	h.ServeHTTP(res, req)
 	if res.Code != 404 {
 		t.Errorf("status: expected %d, got %d", 404, res.Code)
 	}
-	res, req = resreq()
-	// TODO: fix this / clean up properly
-	h.ServeHTTP(res, req.WithContext(context.WithValue(context.Background(), handlerKey, http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+
+	var h2 http.Handler = New(NotFoundFunc(func(res http.ResponseWriter, req *http.Request) {
 		res.WriteHeader(123)
-	}))))
+	}))
+
+	res, req = resreq()
+	h2.ServeHTTP(res, req)
 	if res.Code != 123 {
 		t.Errorf("status: expected %d, got %d", 123, res.Code)
 	}

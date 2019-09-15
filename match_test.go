@@ -7,15 +7,15 @@ import (
 	"testing"
 )
 
-func TestPat(t *testing.T) {
+func TestPathSpec(t *testing.T) {
 	type pv map[nameKey]interface{}
 
 	tests := []struct {
-		pat   string
+		spec  string
 		req   string
 		match bool
 		vars  map[nameKey]interface{}
-		path  string
+		exp   string
 	}{
 		{"/", "/", true, nil, ""},
 		{"/", "/hello", false, nil, ""},
@@ -60,52 +60,55 @@ func TestPat(t *testing.T) {
 		{"/:name/*", "/carl/photos%2f2015", true, pv{"name": "carl"}, "/photos%2f2015"},
 	}
 
-	for _, test := range tests {
-		pat := New(test.pat)
+	for i, test := range tests {
+		p := NewPathSpec(test.spec)
 
-		if str := pat.String(); str != test.pat {
-			t.Errorf("[%q %q] String()=%q, expected=%q", test.pat, test.req, str, test.pat)
+		if str := p.String(); test.spec != str {
+			t.Errorf("test %d [%q %q] expected=%q, String()=%q", i, test.spec, test.req, test.exp, str)
 		}
 
-		req := pat.Match(reqPath("GET", test.req))
+		req := p.Match(reqPath("GET", test.req))
 		if (req != nil) != test.match {
-			t.Errorf("[%q %q] match=%v, expected=%v", test.pat, test.req, req != nil, test.match)
+			t.Errorf("test %d [%q %q] expected=%v, match=%v", i, test.spec, test.req, test.match, req != nil)
 		}
 		if req == nil {
 			continue
 		}
 
 		ctx := req.Context()
-		if path := Path(ctx); path != test.path {
-			t.Errorf("[%q %q] path=%q, expected=%q", test.pat, test.req, path, test.path)
+		if path := Path(ctx); test.exp != path {
+			t.Errorf("test %d [%q %q] expected=%q, path=%q", i, test.spec, test.req, test.exp, path)
 		}
 
 		vars := ctx.Value(allNames)
 		if (vars != nil) != (test.vars != nil) {
-			t.Errorf("[%q %q] vars=%#v, expected=%#v", test.pat, test.req, vars, test.vars)
+			t.Errorf("test %d [%q %q] vars=%#v, expected=%#v", i, test.spec, test.req, vars, test.vars)
 		}
 		if vars == nil {
 			continue
 		}
 		if tvars := vars.(map[nameKey]interface{}); !reflect.DeepEqual(tvars, test.vars) {
-			t.Errorf("[%q %q] vars=%v, expected=%v", test.pat, test.req, tvars, test.vars)
+			t.Errorf("test %d [%q %q] vars=%v, expected=%v", i, test.spec, test.req, tvars, test.vars)
 		}
 	}
 }
 
-func TestBadPathEncoding(t *testing.T) {
+func TestPathSpecBadPathEncoding(t *testing.T) {
 	// This one is hard to fit into the table-driven test above since Go
 	// refuses to have anything to do with poorly encoded URLs.
 	ctx := WithPath(context.Background(), "/%nope")
-	r, _ := http.NewRequest("GET", "/", nil)
-	if New("/:name").Match(r.WithContext(ctx)) != nil {
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if NewPathSpec("/:name").Match(req.WithContext(ctx)) != nil {
 		t.Error("unexpected match")
 	}
 }
 
 func TestPrefix(t *testing.T) {
 	tests := []struct {
-		pat    string
+		spec   string
 		prefix string
 	}{
 		{"/", "/"},
@@ -115,29 +118,29 @@ func TestPrefix(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		pat := New(test.pat)
-		if prefix := pat.Prefix(); prefix != test.prefix {
-			t.Errorf("%q.Prefix() = %q, expected %q", test.pat, prefix, test.prefix)
+		p := NewPathSpec(test.spec)
+		if prefix := p.Prefix(); prefix != test.prefix {
+			t.Errorf("%q.Prefix() = %q, expected %q", test.spec, prefix, test.prefix)
 		}
 	}
 }
 
 func TestMethods(t *testing.T) {
-	pat := New("/foo")
-	if methods := pat.Methods(); methods != nil {
+	p := NewPathSpec("/foo")
+	if methods := p.Methods(); methods != nil {
 		t.Errorf("expected nil with no methods, got %v", methods)
 	}
 
-	pat = Get("/boo")
+	p = Get("/boo")
 	expect := map[string]struct{}{"GET": {}, "HEAD": {}}
-	if methods := pat.Methods(); !reflect.DeepEqual(expect, methods) {
+	if methods := p.Methods(); !reflect.DeepEqual(expect, methods) {
 		t.Errorf("methods=%v, expected %v", methods, expect)
 	}
 }
 
 func TestParam(t *testing.T) {
-	pat := New("/hello/:name")
-	req := pat.Match(reqPath("GET", "/hello/carl"))
+	p := NewPathSpec("/hello/:name")
+	req := p.Match(reqPath("GET", "/hello/carl"))
 	if req == nil {
 		t.Fatal("expected a match")
 	}
@@ -147,93 +150,93 @@ func TestParam(t *testing.T) {
 }
 
 func TestNewWithMethod(t *testing.T) {
-	pat := New("/", WithMethod("LOCK", "UNLOCK"))
-	if pat.Match(reqPath("POST", "/")) != nil {
+	p := NewPathSpec("/", WithMethod("LOCK", "UNLOCK"))
+	if p.Match(reqPath("POST", "/")) != nil {
 		t.Errorf("pattern was LOCK/UNLOCK, but matched POST")
 	}
-	if pat.Match(reqPath("LOCK", "/")) == nil {
+	if p.Match(reqPath("LOCK", "/")) == nil {
 		t.Errorf("pattern didn't match LOCK")
 	}
-	if pat.Match(reqPath("UNLOCK", "/")) == nil {
+	if p.Match(reqPath("UNLOCK", "/")) == nil {
 		t.Errorf("pattern didn't match UNLOCK")
 	}
 }
 
 func TestDelete(t *testing.T) {
-	pat := Delete("/")
-	if pat.Match(reqPath("GET", "/")) != nil {
+	p := Delete("/")
+	if p.Match(reqPath("GET", "/")) != nil {
 		t.Errorf("pattern was DELETE, but matched GET")
 	}
-	if pat.Match(reqPath("DELETE", "/")) == nil {
+	if p.Match(reqPath("DELETE", "/")) == nil {
 		t.Errorf("pattern didn't match DELETE")
 	}
 }
 
 func TestGet(t *testing.T) {
-	pat := Get("/")
-	if pat.Match(reqPath("POST", "/")) != nil {
+	p := Get("/")
+	if p.Match(reqPath("POST", "/")) != nil {
 		t.Errorf("pattern was GET, but matched POST")
 	}
-	if pat.Match(reqPath("GET", "/")) == nil {
+	if p.Match(reqPath("GET", "/")) == nil {
 		t.Errorf("pattern didn't match GET")
 	}
-	if pat.Match(reqPath("HEAD", "/")) == nil {
+	if p.Match(reqPath("HEAD", "/")) == nil {
 		t.Errorf("pattern didn't match HEAD")
 	}
 }
 
 func TestHead(t *testing.T) {
-	pat := Head("/")
-	if pat.Match(reqPath("GET", "/")) != nil {
+	p := Head("/")
+	if p.Match(reqPath("GET", "/")) != nil {
 		t.Errorf("pattern was HEAD, but matched GET")
 	}
-	if pat.Match(reqPath("HEAD", "/")) == nil {
+	if p.Match(reqPath("HEAD", "/")) == nil {
 		t.Errorf("pattern didn't match HEAD")
 	}
 }
 
 func TestOptions(t *testing.T) {
-	pat := Options("/")
-	if pat.Match(reqPath("GET", "/")) != nil {
+	p := Options("/")
+	if p.Match(reqPath("GET", "/")) != nil {
 		t.Errorf("pattern was OPTIONS, but matched GET")
 	}
-	if pat.Match(reqPath("OPTIONS", "/")) == nil {
+	if p.Match(reqPath("OPTIONS", "/")) == nil {
 		t.Errorf("pattern didn't match OPTIONS")
 	}
 }
 
 func TestPatch(t *testing.T) {
-	pat := Patch("/")
-	if pat.Match(reqPath("GET", "/")) != nil {
+	p := Patch("/")
+	if p.Match(reqPath("GET", "/")) != nil {
 		t.Errorf("pattern was PATCH, but matched GET")
 	}
-	if pat.Match(reqPath("PATCH", "/")) == nil {
+	if p.Match(reqPath("PATCH", "/")) == nil {
 		t.Errorf("pattern didn't match PATCH")
 	}
 }
 
 func TestPost(t *testing.T) {
-	pat := Post("/")
-	if pat.Match(reqPath("GET", "/")) != nil {
+	p := Post("/")
+	if p.Match(reqPath("GET", "/")) != nil {
 		t.Errorf("pattern was POST, but matched GET")
 	}
-	if pat.Match(reqPath("POST", "/")) == nil {
+	if p.Match(reqPath("POST", "/")) == nil {
 		t.Errorf("pattern didn't match POST")
 	}
 }
 
 func TestPut(t *testing.T) {
-	pat := Put("/")
-	if pat.Match(reqPath("GET", "/")) != nil {
+	p := Put("/")
+	if p.Match(reqPath("GET", "/")) != nil {
 		t.Errorf("pattern was PUT, but matched GET")
 	}
-	if pat.Match(reqPath("PUT", "/")) == nil {
+	if p.Match(reqPath("PUT", "/")) == nil {
 		t.Errorf("pattern didn't match PUT")
 	}
 }
 
 func TestExistingContext(t *testing.T) {
-	pat := New("/hi/:c/:a/:r/:l")
+	p := NewPathSpec("/hi/:c/:a/:r/:l")
 	req, err := http.NewRequest("GET", "/hi/foo/bar/baz/quux", nil)
 	if err != nil {
 		panic(err)
@@ -247,7 +250,7 @@ func TestExistingContext(t *testing.T) {
 	ctx = context.WithValue(ctx, nameKey("user"), "carl")
 
 	req = req.WithContext(ctx)
-	req = pat.Match(req)
+	req = p.Match(req)
 	if req == nil {
 		t.Fatalf("expected pattern to match")
 	}
