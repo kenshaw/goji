@@ -24,7 +24,7 @@ import (
         "fmt"
         "net/http"
 
-        "github.com/brankas/goji"
+        "github.com/kenshaw/goji"
 )
 
 func hello(w http.ResponseWriter, r *http.Request) {
@@ -42,4 +42,4 @@ func main() {
 
 Please refer to [Goji's GoDoc Documentation][godoc] for a full API reference.
 
-[godoc]: https://godoc.org/github.com/brankas/goji
+[godoc]: https://godoc.org/github.com/kenshaw/goji
